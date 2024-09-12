@@ -1,0 +1,105 @@
+#!/bin/bash
+
+GREEN='\033[32m'
+YELLOW='\033[33m'
+RED='\033[31m'
+CLEAR='\033[0m'
+
+AWS_REGION_NAMES=(
+  "AF-CPT" "AP-HKG" "AP-TYO" "AP-SEL" "AP-OSA" "AP-BOM" "AP-HYD"
+  "AP-SIN" "AP-SYD" "AP-JKT" "AP-MEL" "CA-CEN" "EU-FRA" "EU-ZUR"
+  "EU-STO" "EU-MIL" "EU-ESP" "EU-DUB" "EU-LON" "EU-PAR" "ME-UAE"
+  "ME-BHR" "SA-SAO" "US-EAST-1" "US-EAST-2" "US-WEST-1" "US-WEST-2"
+  "IL-TLV"
+)
+
+AWS_REGION_CODES=(
+  "af-south-1" "ap-east-1" "ap-northeast-1" "ap-northeast-2" "ap-northeast-3"
+  "ap-south-1" "ap-south-2" "ap-southeast-1" "ap-southeast-2" "ap-southeast-3"
+  "ap-southeast-4" "ca-central-1" "eu-central-1" "eu-central-2" "eu-north-1"
+  "eu-south-1" "eu-south-2" "eu-west-1" "eu-west-2" "eu-west-3"
+  "me-central-1" "me-south-1" "sa-east-1" "us-east-1" "us-east-2"
+  "us-west-1" "us-west-2" "il-central-1"
+)
+
+check_latency() {
+    local region_code=$1
+    local service="dynamodb"
+    local transport="tcp"
+
+    if [[ "$transport" == "tcp" ]]; then
+        ping -c 1 "$service.$region_code.amazonaws.com" | grep 'time=' | awk '{print $7}' | sed 's/time=//g'
+    else
+        curl -o /dev/null -s -w "%{time_total}\n" "http://$service.$region_code.amazonaws.com"
+    fi
+}
+
+format_latency() {
+    local latency=$1
+    if [[ -z "$latency" ]]; then
+        echo -e "\e[31mN/A\e[0m"
+        return
+    fi
+
+    latency_num=$(echo "$latency" | sed 's/ms//')
+    
+    if (( $(echo "$latency_num < 100" | bc -l) )); then
+        printf "${GREEN}%-18s${CLEAR}" "$latency"
+    elif (( $(echo "$latency_num >= 100 && $latency_num <= 180" | bc -l) )); then
+        printf "${YELLOW}%-18s${CLEAR}" "$latency" 
+    else
+        printf "${RED}%-18s${CLEAR}" "$latency"
+    fi
+}
+
+print_row() {
+    local row=("$@")
+    local width=25  
+    printf "|"
+    for cell in "${row[@]}"; do
+        printf " %-18s |" "$cell"  
+    done
+    echo
+}
+
+print_line() {
+    local cols=$1+1
+    printf "+"
+    for ((i = 0; i < cols; i++)); do
+        printf "%-20s+" "--------------------"
+    done
+    echo
+}
+
+echo -e "\nLatency Table (ms)\n"
+
+MAX_COLS=7
+rows=(${#AWS_REGION_NAMES[@]})
+
+for ((seg_start = 0; seg_start < $rows; seg_start += $MAX_COLS)); do
+    seg_end=$((seg_start + MAX_COLS))
+    [[ $seg_end -ge $rows ]] && seg_end=$rows
+
+    header=("${AWS_REGION_NAMES[@]:seg_start:MAX_COLS}")
+    print_line $MAX_COLS
+    print_row "Source\Destination" "${header[@]}"
+    print_line $MAX_COLS
+
+    for i in "${!AWS_REGION_NAMES[@]}"; do
+        source_name="${AWS_REGION_NAMES[$i]}"
+        row=("$source_name")
+
+        for ((j = seg_start; j < seg_end; j++)); do
+            dest_code="${AWS_REGION_CODES[$j]}"
+            latency=$(check_latency "$dest_code")
+
+            formatted_latency=$(format_latency "$latency")
+            row+=("$formatted_latency")
+        done
+
+        print_row "${row[@]}"
+        print_line $MAX_COLS
+    done
+
+    echo -e "\n"
+done
